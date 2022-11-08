@@ -5,6 +5,7 @@
 
 #define SIZE_OF_PAGE 4096
 #define NUM_PAGES 128
+#define MAX_PAGES_PER_PROCESS 64
 
 struct pageDirectory
 {
@@ -38,56 +39,6 @@ int getPhysicalAddress (int pageNumber) {
     return pageTable[pageNumber].address;
 }
 
-// Returns an integer corresponding to the first free page number
-int pm_malloc() {
-    int i;
-    int freePageNumber = -1;
-    for ( i = 0; i < NUM_PAGES; i++) {
-      if (pageTable[i].free) {
-            pageTable[i].free = false;
-            pageTable[i].pid = getpid();
-            freePageNumber = i;
-            break;
-        }
-   }
-   return freePageNumber;
-}
-
-void delete_local_storage_page(int pid, int pageNumber) {
-
-}
-
-void pm_free(int pageNumber) {
-    if (pageNumber > NUM_PAGES || pageNumber < 0) {
-        printf("Invalid page number\n");
-        exit(EXIT_FAILURE);
-    }
-    else if (pageTable[pageNumber].pid != getpid()) {
-       delete_local_storage_page(getpid(), pageNumber);
-    }
-    else {
-        pageTable[pageNumber].free = true;
-        pageTable[pageNumber].clock = false;
-        pageTable[pageNumber].pid = -1;
-    }
-    printf("Page freed %d\n", pageNumber);
-}
-
-void set_data(int pageNumber, int offset, char data) {
-    if (pageNumber > NUM_PAGES || pageNumber < 0) {
-        printf("Invalid page number\n");
-        exit(EXIT_FAILURE);
-    }
-    if (offset > SIZE_OF_PAGE || offset < 0) {
-        printf("Invalid offset (0-4095)\n");
-        exit(EXIT_FAILURE);
-    }
-
-
-
-    int physAddress = getPhysicalAddress(pageNumber);
-    customMemory[physAddress + offset] = data;
-}
 
 void save_page_to_disk(int pageNumber, int pid) {
     FILE *file_local;
@@ -112,7 +63,139 @@ void save_page_to_disk(int pageNumber, int pid) {
             exit(EXIT_FAILURE);
         }
     }
+}
 
+int findNumPagesAllocatedToPid(int pid) {
+    int num = 0;
+    int i;
+    for ( i = 0; i < NUM_PAGES; i++) {
+      if (pageTable[i].pid == pid) {
+            num = num +1;
+        }
+   }
+   return num;
+}
+
+int findPageToFree() {
+    int pageToFree = -1;
+    int i;
+    int currentPid = getpid();
+    for ( i = 0; i < NUM_PAGES; i++) {
+      if (pageTable[i].pid != currentPid && pageTable[i].clock == false) {
+            pageToFree = i;
+            break;
+        }
+        else {
+            pageTable[i].clock = false;
+        }
+   }
+   if (pageToFree == -1) {
+        for ( i = 0; i < NUM_PAGES; i++) {
+          if (pageTable[i].pid != currentPid && pageTable[i].clock == false) {
+                pageToFree = i;
+                break;
+            }
+       }
+   }
+
+   return pageToFree;
+
+}
+
+// Returns an integer corresponding to the first free page number
+int pm_malloc() {
+    int i;
+    int freePageNumber = -1;
+
+    if (findNumPagesAllocatedToPid(getpid()) >= MAX_PAGES_PER_PROCESS) {
+        printf("You have exhausted memory limit\n");
+        return freePageNumber;
+    }
+
+    for ( i = 0; i < NUM_PAGES; i++) {
+      if (pageTable[i].free) {
+            pageTable[i].free = false;
+            pageTable[i].pid = getpid();
+            freePageNumber = i;
+            break;
+        }
+   }
+   if (freePageNumber == -1) {
+        freePageNumber = findPageToFree();
+        save_page_to_disk(freePageNumber, pageTable[freePageNumber].pid);
+        pageTable[i].free = false;
+        pageTable[i].pid = getpid();
+   }
+   return freePageNumber;
+}
+
+void delete_local_storage_page(int pid, int pageNumber) {
+    char filename[10];
+    snprintf(filename, sizeof filename, "%d_%d\r\n", pid, pageNumber);
+    remove(filename);
+}
+
+void pm_free(int pageNumber) {
+    if (pageNumber > NUM_PAGES || pageNumber < 0) {
+        printf("Invalid page number\n");
+        exit(EXIT_FAILURE);
+    }
+    else if (pageTable[pageNumber].pid != getpid()) {
+       delete_local_storage_page(getpid(), pageNumber);
+    }
+    else {
+        pageTable[pageNumber].free = true;
+        pageTable[pageNumber].clock = false;
+        pageTable[pageNumber].pid = -1;
+        delete_local_storage_page(getpid(), pageNumber);
+    }
+    printf("Page freed %d\n", pageNumber);
+}
+
+int load_page_into_memory(int pageNumber, int pid) {
+    FILE *myFile;
+    char filename[10];
+    snprintf(filename, sizeof filename, "%d_%d\r\n", pid, pageNumber);
+    myFile = fopen(filename, "r");
+    char * buffer = &customMemory[pageTable[pageNumber].address];
+    if (myFile) {
+        if( 1!=fread( buffer , SIZE_OF_PAGE, 1 , myFile) ) {
+            printf("Could not read saved page\n");
+            fclose(myFile);
+            return -1;
+        }
+        else {
+            pageTable[pageNumber].pid = pid;
+            pageTable[pageNumber].free = false;
+            pageTable[pageNumber].clock = false;
+            fclose(myFile);
+            return 0;
+        }
+    }
+    else {
+        printf("Page does not exist\n");
+        return -1;
+    }
+}
+
+void set_data(int pageNumber, int offset, char data) {
+    if (pageNumber > NUM_PAGES || pageNumber < 0) {
+        printf("Invalid page number\n");
+        exit(EXIT_FAILURE);
+    }
+    if (offset > SIZE_OF_PAGE || offset < 0) {
+        printf("Invalid offset (0-4095)\n");
+        exit(EXIT_FAILURE);
+    }
+    if (pageTable[pageNumber].pid != getpid()) {
+        save_page_to_disk(pageNumber, pageTable[pageNumber].pid);
+        if (load_page_into_memory(pageNumber, getpid()) != 0) {
+            printf("Invalid page number\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    int physAddress = getPhysicalAddress(pageNumber);
+    customMemory[physAddress + offset] = data;
 }
 
 char getData(int pageNumber, int offset) {
@@ -127,6 +210,13 @@ char getData(int pageNumber, int offset) {
     if (pageTable[pageNumber].free == true) {
         printf("Page has not been allocated\n");
         exit(EXIT_FAILURE);
+    }
+    if (pageTable[pageNumber].pid != getpid()) {
+        save_page_to_disk(pageNumber, pageTable[pageNumber].pid);
+        if (load_page_into_memory(pageNumber, getpid()) != 0) {
+            printf("Invalid page number\n");
+            exit(EXIT_FAILURE);
+        }
     }
     int physAddress = getPhysicalAddress(pageNumber);
     char c = customMemory[physAddress + offset];
