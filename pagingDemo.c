@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define SIZE_OF_PAGE 4096
 #define NUM_PAGES 128
@@ -10,6 +11,8 @@ struct pageDirectory
     int index;
     int address;
     bool free;
+    bool clock;
+    int pid;
 } pageTable[NUM_PAGES];
 
 char customMemory[SIZE_OF_PAGE * NUM_PAGES];
@@ -21,6 +24,8 @@ void initializePageDirectory()
   for( i = 0; i < NUM_PAGES; i = i + 1 ){
       pageTable[i].index = i;
       pageTable[i].free = true;
+      pageTable[i].clock = false;
+      pageTable[i].pid = -1;
       pageTable[i].address = i*SIZE_OF_PAGE;
    }
 }
@@ -33,43 +38,23 @@ int getPhysicalAddress (int pageNumber) {
     return pageTable[pageNumber].address;
 }
 
-// Returns an array of integers corresponding to free page numbers
-int * pm_malloc(int size) {
-    if (size <= 0) {
-        printf("Positive bytes required\n");
-        exit(EXIT_FAILURE);
-    }
-    int numPages = size/SIZE_OF_PAGE + (size % SIZE_OF_PAGE != 0);
-    if (numPages > NUM_PAGES) {
-        printf("Insufficient memory\n");
-        exit(EXIT_FAILURE);
-    }
-    int availablePages = 0;
+// Returns an integer corresponding to the first free page number
+int pm_malloc() {
     int i;
-    for (i = 0; i < NUM_PAGES; i++) {
-        if (pageTable[i].free) {
-            availablePages = availablePages + 1;
+    int freePageNumber = -1;
+    for ( i = 0; i < NUM_PAGES; i++) {
+      if (pageTable[i].free) {
+            pageTable[i].free = false;
+            pageTable[i].pid = getpid();
+            freePageNumber = i;
+            break;
         }
-    }
-    if (availablePages < numPages) {
-        printf("Insufficient memory\n");
-        exit(EXIT_FAILURE);
-    }
-    else {
-        int * availablePageNumbers = malloc (sizeof (int) * availablePages);
-        int allocatedPages = 0;
-        for ( i = 0; i < NUM_PAGES; i++) {
-          if (pageTable[i].free) {
-                availablePageNumbers[allocatedPages] = i;
-                allocatedPages = allocatedPages + 1;
-                pageTable[i].free = false;
-            }
-          if (allocatedPages == numPages) {
-              break;
-          }
-       }
-       return availablePageNumbers;
-    }
+   }
+   return freePageNumber;
+}
+
+void delete_local_storage_page(int pid, int pageNumber) {
+
 }
 
 void pm_free(int pageNumber) {
@@ -77,10 +62,15 @@ void pm_free(int pageNumber) {
         printf("Invalid page number\n");
         exit(EXIT_FAILURE);
     }
+    else if (pageTable[pageNumber].pid != getpid()) {
+       delete_local_storage_page(getpid(), pageNumber);
+    }
     else {
         pageTable[pageNumber].free = true;
-        printf("Page freed %d\n", pageNumber);
+        pageTable[pageNumber].clock = false;
+        pageTable[pageNumber].pid = -1;
     }
+    printf("Page freed %d\n", pageNumber);
 }
 
 void set_data(int pageNumber, int offset, char data) {
@@ -92,12 +82,37 @@ void set_data(int pageNumber, int offset, char data) {
         printf("Invalid offset (0-4095)\n");
         exit(EXIT_FAILURE);
     }
-    if (pageTable[pageNumber].free == true) {
-        printf("Page has not been allocated\n");
-        exit(EXIT_FAILURE);
-    }
+
+
+
     int physAddress = getPhysicalAddress(pageNumber);
     customMemory[physAddress + offset] = data;
+}
+
+void save_page_to_disk(int pageNumber, int pid) {
+    FILE *file_local;
+
+    if (pageTable[pageNumber].free == true || pageTable[pageNumber].pid != pid) {
+        printf("Unable to save, invalid page number\n");
+    }
+    else {
+        char filename[10];
+        snprintf(filename, sizeof filename, "%d_%d\r\n", pid, pageNumber);
+        file_local = fopen(filename, "wb"); // wb -write binary
+        char * pageToSave = &customMemory[pageTable[pageNumber].address];
+        if (file_local != NULL)
+        {
+            fwrite(pageToSave, SIZE_OF_PAGE, 1, file_local);
+            fclose(file_local);
+            printf("Page saved\n");
+        }
+        else
+        {
+            printf("Failed to save page to disk\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
 }
 
 char getData(int pageNumber, int offset) {
@@ -142,19 +157,11 @@ int main()
     int keepRunning = 1;
     char dataScanned;
     while (keepRunning == 1) {
-        printf("Enter choice\n 1:Allocate Pages \n 2:Free Memory\n 3:View physical address\n 4:View data at address\n 5:Set data at address\n");
+        printf("Enter choice\n 1:Allocate Page \n 2:Free Memory\n 3:View physical address\n 4:View data at address\n 5:Set data at address\n 6:Manually save page to disk\n");
         int choice = getUserInputInteger();
         if (choice == 1) {
-            int size;
-            printf("Enter size required in bytes\n");
-            size = getUserInputInteger();
-            int * pagesAllocated = pm_malloc(size);
-            printf("Pages allocated: ");
-            int numPages = size/SIZE_OF_PAGE + (size % SIZE_OF_PAGE != 0);
-            int i;
-            for (i = 0; i < numPages; i++) {
-                printf("%d\t", pagesAllocated[i]);
-            }
+            int pagesAllocated = pm_malloc();
+            printf("Pages allocated: %d\t", pagesAllocated);
             printf("\n");
         }
         else if (choice == 2) {
@@ -190,6 +197,12 @@ int main()
             scanf(" %c", &dataScanned);
 
             set_data(pageToView, offset, dataScanned);
+        }
+        else if (choice == 6) {
+            printf("Enter page number\n");
+            int pageToSave = getUserInputInteger();
+            int pid = getpid();
+            save_page_to_disk(pageToSave, pid);
         }
 
         else {
