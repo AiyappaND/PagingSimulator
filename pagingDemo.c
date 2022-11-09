@@ -2,10 +2,11 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <errno.h>
 
 #define SIZE_OF_PAGE 4096
 #define NUM_PAGES 128
-#define MAX_PAGES_PER_PROCESS 64
 
 struct pageDirectory
 {
@@ -42,13 +43,12 @@ int getPhysicalAddress (int pageNumber) {
 
 void save_page_to_disk(int pageNumber, int pid) {
     FILE *file_local;
-
     if (pageTable[pageNumber].free == true || pageTable[pageNumber].pid != pid) {
         printf("Unable to save, invalid page number\n");
     }
     else {
         char filename[10];
-        snprintf(filename, sizeof filename, "%d_%d\r\n", pid, pageNumber);
+        snprintf(filename, sizeof filename, "%d_%d", pid, pageNumber);
         file_local = fopen(filename, "wb"); // wb -write binary
         char * pageToSave = &customMemory[pageTable[pageNumber].address];
         if (file_local != NULL)
@@ -81,7 +81,7 @@ int findPageToFree() {
     int i;
     int currentPid = getpid();
     for ( i = 0; i < NUM_PAGES; i++) {
-      if (pageTable[i].pid != currentPid && pageTable[i].clock == false) {
+      if (pageTable[i].clock == false) {
             pageToFree = i;
             break;
         }
@@ -91,7 +91,7 @@ int findPageToFree() {
    }
    if (pageToFree == -1) {
         for ( i = 0; i < NUM_PAGES; i++) {
-          if (pageTable[i].pid != currentPid && pageTable[i].clock == false) {
+          if (pageTable[i].clock == false) {
                 pageToFree = i;
                 break;
             }
@@ -107,13 +107,8 @@ int pm_malloc() {
     int i;
     int freePageNumber = -1;
 
-    if (findNumPagesAllocatedToPid(getpid()) >= MAX_PAGES_PER_PROCESS) {
-        printf("You have exhausted memory limit\n");
-        return freePageNumber;
-    }
-
     for ( i = 0; i < NUM_PAGES; i++) {
-      if (pageTable[i].free) {
+      if (pageTable[i].free == true) {
             pageTable[i].free = false;
             pageTable[i].pid = getpid();
             freePageNumber = i;
@@ -131,7 +126,7 @@ int pm_malloc() {
 
 void delete_local_storage_page(int pid, int pageNumber) {
     char filename[10];
-    snprintf(filename, sizeof filename, "%d_%d\r\n", pid, pageNumber);
+    snprintf(filename, sizeof filename, "%d_%d", pid, pageNumber);
     remove(filename);
 }
 
@@ -155,7 +150,7 @@ void pm_free(int pageNumber) {
 int load_page_into_memory(int pageNumber, int pid) {
     FILE *myFile;
     char filename[10];
-    snprintf(filename, sizeof filename, "%d_%d\r\n", pid, pageNumber);
+    snprintf(filename, sizeof filename, "%d_%d", pid, pageNumber);
     myFile = fopen(filename, "r");
     char * buffer = &customMemory[pageTable[pageNumber].address];
     if (myFile) {
@@ -196,6 +191,7 @@ void set_data(int pageNumber, int offset, char data) {
     }
     int physAddress = getPhysicalAddress(pageNumber);
     customMemory[physAddress + offset] = data;
+    pageTable[pageNumber].clock = true;
 }
 
 char getData(int pageNumber, int offset) {
@@ -247,7 +243,7 @@ int main()
     int keepRunning = 1;
     char dataScanned;
     while (keepRunning == 1) {
-        printf("Enter choice\n 1:Allocate Page \n 2:Free Memory\n 3:View physical address\n 4:View data at address\n 5:Set data at address\n 6:Manually save page to disk\n");
+        printf("Enter choice\n 1:Allocate Page \n 2:Free Memory\n 3:View physical address\n 4:View data at address\n 5:Set data at address\n 6:Manually save page to disk\n 7:Manually load page from disk\n 8:Simulate page fault with overallocation\n");
         int choice = getUserInputInteger();
         if (choice == 1) {
             int pagesAllocated = pm_malloc();
@@ -293,6 +289,35 @@ int main()
             int pageToSave = getUserInputInteger();
             int pid = getpid();
             save_page_to_disk(pageToSave, pid);
+        }
+        else if (choice == 7) {
+            printf("Enter page number\n");
+            int pageToLoad = getUserInputInteger();
+            int pid = getpid();
+            load_page_into_memory(pageToLoad, pid);
+        }
+        else if (choice == 8) {
+           int child_pages;
+           for (child_pages = 0; child_pages < NUM_PAGES; child_pages ++) {
+                int pageAllocated = pm_malloc();
+                int addressToView = getPhysicalAddress(pageAllocated);
+                int offset = 0;
+                char child_char = 'c';
+                for (offset = 0; offset < SIZE_OF_PAGE; offset ++) {
+                    set_data(pageAllocated, offset, child_char);
+                }
+           }
+           printf("Normal allocation done\n");
+           for (child_pages = 0; child_pages < 3; child_pages ++) {
+                int pageAllocated = pm_malloc();
+                int addressToView = getPhysicalAddress(pageAllocated);
+                int offset = 0;
+                char child_char = 'p';
+                for (offset = 0; offset < SIZE_OF_PAGE; offset ++) {
+                    set_data(pageAllocated, offset, child_char);
+                }
+           }
+           printf("Extra allocation done\n");
         }
 
         else {
